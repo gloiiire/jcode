@@ -4021,6 +4021,7 @@ name = "jcode-protocol"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "jcode-background-types",
  "jcode-batch-types",
  "jcode-config-types",
  "jcode-message-types",
@@ -4518,6 +4519,7 @@ dependencies = [
  "hex",
  "image",
  "jcode-app-core",
+ "jcode-background-types",
  "jcode-build-meta",
  "jcode-config-types",
  "jcode-core",

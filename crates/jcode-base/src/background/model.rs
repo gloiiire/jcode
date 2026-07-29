@@ -164,7 +164,7 @@ pub(super) fn progress_wait_reason(
 // Progress-display formatting now lives in `jcode-background-types` (pure
 // functions over BackgroundTaskProgress); re-export for existing callers.
 pub use jcode_background_types::{
-    format_progress_display, format_progress_summary, render_progress_bar,
+    BackgroundTaskSummary, format_progress_display, format_progress_summary, render_progress_bar,
 };
 
 pub(super) fn progress_equivalent(a: &BackgroundTaskProgress, b: &BackgroundTaskProgress) -> bool {

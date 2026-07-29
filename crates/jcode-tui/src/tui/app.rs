@@ -1451,6 +1451,13 @@ pub struct App {
     input_undo_stack: Vec<(String, usize)>,
     // Short-lived notice for status feedback (model switch, cycle diff mode, etc.)
     status_notice: Option<(String, Instant)>,
+    // Background tasks the server says are still running for this session.
+    //
+    // The client process has its own `background::global()`, but tools run in
+    // the server process, so that map is always empty here. This is the only
+    // source of truth for the indicator when running client/server; the local
+    // snapshot still serves the embedded/local mode.
+    remote_background_tasks: Vec<jcode_background_types::BackgroundTaskSummary>,
     // Distinct learned-keybinding nudge ("you keep doing X the slow way, press
     // <key>"). Rendered in its own pop-out color, separate from status_notice,
     // and shown at most once per session.

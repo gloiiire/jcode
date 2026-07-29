@@ -169,6 +169,45 @@ pub(super) async fn dispatch_swarm_await_completion(
     }
 }
 
+/// Push the current set of running background tasks to a session's clients.
+///
+/// The TUI keeps a persistent indicator rather than reacting to one-shot
+/// notifications, so it needs the whole set. Sending it is cheap and idempotent;
+/// the client compares against what it holds and only redraws on a change.
+pub(super) async fn broadcast_background_tasks(
+    session_id: &str,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+) {
+    let running = crate::background::global().running_summaries_for_session(session_id);
+    fanout_session_event(
+        swarm_members,
+        session_id,
+        ServerEvent::BackgroundTasks { running },
+    )
+    .await;
+}
+
+/// Sweep every session that has background tasks and refresh their clients.
+///
+/// This also carries the completion of *detached* tasks. Their status files are
+/// only reconciled inside `list()`, which until now ran solely when the model
+/// invoked the `bg` tool — so a detached process could finish and nobody would
+/// ever learn about it. Calling `list()` here publishes the missing
+/// `BackgroundTaskCompleted` events as a side effect.
+pub(super) async fn sweep_background_tasks(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+) {
+    // Only touch sessions that actually have tasks, so an idle server with many
+    // attached clients does no fanout at all.
+    let mut sessions: HashSet<String> = HashSet::new();
+    for task in crate::background::global().list().await {
+        sessions.insert(task.session_id);
+    }
+    for session_id in sessions {
+        broadcast_background_tasks(&session_id, swarm_members).await;
+    }
+}
+
 pub(super) async fn dispatch_background_task_progress(
     task: &crate::bus::BackgroundTaskProgressEvent,
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,

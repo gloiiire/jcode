@@ -51,10 +51,10 @@ mod util;
 
 pub(super) use self::await_members_state::AwaitMembersRuntime;
 use self::background_tasks::{
-    dispatch_background_task_completion, dispatch_background_task_progress,
-    dispatch_swarm_await_completion, dispatch_swarm_batch_progress, dispatch_swarm_output_tail,
-    dispatch_swarm_runtime_status, dispatch_swarm_todo_progress, dispatch_swarm_tool_activity,
-    dispatch_ui_activity,
+    broadcast_background_tasks, dispatch_background_task_completion,
+    dispatch_background_task_progress, dispatch_swarm_await_completion,
+    dispatch_swarm_batch_progress, dispatch_swarm_output_tail, dispatch_swarm_runtime_status,
+    dispatch_swarm_todo_progress, dispatch_swarm_tool_activity, dispatch_ui_activity,
 };
 use self::debug::{ClientConnectionInfo, ClientDebugState};
 use self::debug_jobs::DebugJob;
@@ -129,6 +129,11 @@ const SERVER_NAME_ENV: &str = "JCODE_SERVER_NAME";
 const SERVER_DISPLAY_NAME_ENV: &str = "JCODE_SERVER_DISPLAY_NAME";
 const MAX_CONFIGURED_SERVER_NAME_LEN: usize = 64;
 const SWARM_TERMINAL_MEMBER_GC_BATCH_SIZE: usize = 64;
+/// How often to reconcile detached background tasks and refresh the clients'
+/// running indicator. Detached processes report nothing on exit, so this is the
+/// only thing that notices them finishing; a few seconds of staleness on an
+/// indicator is not worth a tighter loop.
+const BACKGROUND_TASK_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 async fn prune_expired_terminal_swarm_members(
     sessions: &SessionAgents,
@@ -1271,6 +1276,23 @@ impl Server {
             }
         });
 
+        // Keep attached clients' background indicator honest.
+        //
+        // Progress and completion events already push updates, but a detached
+        // process emits neither: it is reconciled lazily inside `list()`, which
+        // otherwise only runs when the model invokes the `bg` tool. Without a
+        // sweep, a `docker compose watch` that exits on its own would sit in the
+        // indicator forever. The sweep short-circuits when no session has tasks.
+        let sweep_swarm_members = Arc::clone(&self.swarm_state.members);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(BACKGROUND_TASK_SWEEP_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                background_tasks::sweep_background_tasks(&sweep_swarm_members).await;
+            }
+        });
+
         // Spawn reload monitor (event-driven via in-process channel).
         // In the unified server design, self-dev sessions share the main server,
         // so the shared server must always listen for reload signals.
@@ -2174,9 +2196,11 @@ impl Server {
                         &swarm_event_tx,
                     )
                     .await;
+                    broadcast_background_tasks(&task.session_id, &swarm_members).await;
                 }
                 Ok(BusEvent::BackgroundTaskProgress(task)) => {
                     dispatch_background_task_progress(&task, &swarm_members).await;
+                    broadcast_background_tasks(&task.session_id, &swarm_members).await;
                 }
                 Ok(BusEvent::SwarmAwaitCompleted(event)) => {
                     dispatch_swarm_await_completion(

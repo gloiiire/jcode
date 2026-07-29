@@ -562,3 +562,125 @@ async fn abort_live_tasks_for_reload_keeps_naturally_finished_status() -> Result
     );
     Ok(())
 }
+
+/// The client indicator is fed from this, and it has to see both halves of the
+/// manager's split view: in-process futures live only in the task map, detached
+/// processes live only as status files. Reading either one alone leaves a hole.
+#[tokio::test]
+async fn running_summaries_union_in_process_and_detached_tasks() -> Result<()> {
+    let tmp = tempdir()?;
+    let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
+
+    // An in-process task, held open so it is still running when we look.
+    let live = manager
+        .spawn_with_notify(
+            "bash",
+            Some("live task".to_string()),
+            "session-a",
+            false,
+            false,
+            |_output_path| async move {
+                sleep(Duration::from_secs(30)).await;
+                Ok(TaskResult::completed(Some(0)))
+            },
+        )
+        .await;
+
+    // A detached task: registered as a status file only, never in the task map.
+    // Its pid is this test process, which is certainly alive.
+    let detached = manager.reserve_task_info();
+    manager
+        .register_detached_task(
+            &detached,
+            "bash",
+            Some("detached task".to_string()),
+            "session-a",
+            std::process::id(),
+            &chrono::Utc::now().to_rfc3339(),
+            false,
+            false,
+        )
+        .await;
+
+    let summaries = manager.running_summaries_for_session("session-a");
+    let labels: Vec<&str> = summaries.iter().map(|s| s.label.as_str()).collect();
+    assert!(
+        labels.contains(&"live task"),
+        "in-process task missing from {:?}",
+        labels
+    );
+    assert!(
+        labels.contains(&"detached task"),
+        "detached task missing from {:?}",
+        labels
+    );
+    assert_eq!(summaries.len(), 2, "expected exactly two, got {:?}", labels);
+
+    let detached_summary = summaries
+        .iter()
+        .find(|s| s.label == "detached task")
+        .expect("detached summary");
+    assert!(
+        detached_summary.detached,
+        "a detached task must be marked as surviving a restart"
+    );
+
+    // Nothing leaks across sessions: the indicator is per-session.
+    assert!(
+        manager
+            .running_summaries_for_session("session-b")
+            .is_empty(),
+        "another session must not see these tasks"
+    );
+
+    manager.cancel(&live.task_id).await?;
+    manager.cancel(&detached.task_id).await.ok();
+    Ok(())
+}
+
+/// A task promoted from in-process to detached can briefly exist in both views;
+/// showing it twice would double-count the indicator.
+#[tokio::test]
+async fn running_summaries_do_not_double_count_a_task_in_both_views() -> Result<()> {
+    let tmp = tempdir()?;
+    let manager = BackgroundTaskManager::with_output_dir(tmp.path().to_path_buf());
+
+    let live = manager
+        .spawn_with_notify(
+            "bash",
+            Some("promoted".to_string()),
+            "session-dup",
+            false,
+            false,
+            |_output_path| async move {
+                sleep(Duration::from_secs(30)).await;
+                Ok(TaskResult::completed(Some(0)))
+            },
+        )
+        .await;
+
+    // Re-register the *same* task id as detached, which is what promotion does.
+    manager
+        .register_detached_task(
+            &live,
+            "bash",
+            Some("promoted".to_string()),
+            "session-dup",
+            std::process::id(),
+            &chrono::Utc::now().to_rfc3339(),
+            false,
+            false,
+        )
+        .await;
+
+    let summaries = manager.running_summaries_for_session("session-dup");
+    assert_eq!(
+        summaries.len(),
+        1,
+        "the same task must appear once, got {:?}",
+        summaries
+    );
+
+    manager.cancel(&live.task_id).await?;
+    Ok(())
+}

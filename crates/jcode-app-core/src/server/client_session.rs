@@ -864,6 +864,16 @@ pub(super) async fn handle_subscribe(
     let _ = client_event_tx.send(ServerEvent::SessionId {
         session_id: client_session_id.to_string(),
     });
+
+    // Seed the background indicator. A client that attaches mid-flight has seen
+    // none of the events that built the current set, and a detached task from
+    // before this client existed would otherwise stay invisible until it
+    // reported progress — which a `docker compose watch` never does.
+    let running = crate::background::global().running_summaries_for_session(client_session_id);
+    if !running.is_empty() {
+        let _ = client_event_tx.send(ServerEvent::BackgroundTasks { running });
+    }
+
     let _ = client_event_tx.send(ServerEvent::Done { id });
 }
 

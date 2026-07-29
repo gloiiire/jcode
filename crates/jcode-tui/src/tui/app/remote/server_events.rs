@@ -612,6 +612,15 @@ pub(in crate::tui::app) fn handle_server_event(
     let call_output_tokens_seen = remote.call_output_tokens_seen();
 
     match event {
+        ServerEvent::BackgroundTasks { running } => {
+            // Whole-set replace, not a merge: the server sends the current
+            // picture, and an empty set is how the indicator clears.
+            if app.remote_background_tasks == running {
+                return false;
+            }
+            app.remote_background_tasks = running;
+            true
+        }
         ServerEvent::TextDelta { text } => {
             if let Some(thought_line) = App::extract_thought_line(&text) {
                 let ops = app.stream_buffer.flush();

@@ -63,6 +63,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 unicode-width = "0.2"
 
 # Presentation-layer workspace crates
+jcode-background-types = { path = "../jcode-background-types" }
 jcode-build-meta = { path = "../jcode-build-meta" }
 jcode-logging = { path = "../jcode-logging" }
 jcode-core = { path = "../jcode-core" }

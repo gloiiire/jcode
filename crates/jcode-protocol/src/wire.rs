@@ -732,6 +732,20 @@ pub enum ServerEvent {
     #[serde(rename = "text_delta")]
     TextDelta { text: String },
 
+    /// The set of background tasks still running for this session.
+    ///
+    /// Sent as a whole set rather than as deltas: the server is the only place
+    /// that can see both the in-process task map and the detached status files,
+    /// and a client that connects mid-flight needs the current picture, not the
+    /// transitions it missed. An empty vector means nothing is running and is
+    /// what clears the indicator.
+    ///
+    /// Clients that predate this event ignore it.
+    #[serde(rename = "background_tasks")]
+    BackgroundTasks {
+        running: Vec<jcode_background_types::BackgroundTaskSummary>,
+    },
+
     /// Streaming reasoning/thinking delta (raw, unformatted model text).
     ///
     /// Unlike [`ServerEvent::TextDelta`], this carries the model's reasoning as

@@ -1451,9 +1451,24 @@ impl crate::tui::TuiState for App {
             None
         };
 
-        // Gather background task info
-        let background_info = {
-            // Get running background tasks count
+        // Gather background task info.
+        //
+        // Under client/server the server is the only process that can see the
+        // running tasks, so its pushed set wins. The local snapshot below is
+        // kept for the embedded/local mode, where tools do run in this process
+        // and nothing is ever pushed.
+        let background_info = if !self.remote_background_tasks.is_empty() {
+            let running = &self.remote_background_tasks;
+            let progress = running.iter().find(|task| task.detail.is_some());
+            Some(crate::tui::info_widget::BackgroundInfo {
+                running_count: running.len(),
+                running_tasks: running.iter().map(|task| task.label.clone()).collect(),
+                progress_summary: progress.map(|task| task.label.clone()),
+                progress_detail: progress.and_then(|task| task.detail.clone()),
+                memory_agent_active: false,
+                memory_agent_turns: 0,
+            })
+        } else {
             let bg_manager = crate::background::global();
             let (running_count, running_tasks, progress) = bg_manager.running_snapshot();
 

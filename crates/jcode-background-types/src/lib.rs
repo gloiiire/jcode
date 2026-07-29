@@ -73,6 +73,25 @@ pub struct BackgroundTaskProgressEvent {
     pub progress: BackgroundTaskProgress,
 }
 
+/// One running background task, reduced to what a client needs to display it.
+///
+/// The manager's own view is split in two — in-process futures live in a map,
+/// detached processes live only as status files on disk — and neither is
+/// reachable from the client process. This is the flattened form that crosses
+/// the wire so the TUI can show what is still running.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundTaskSummary {
+    pub task_id: String,
+    pub tool_name: String,
+    /// Human label, e.g. the command line for a `bash` task.
+    pub label: String,
+    /// One-line progress display, when the task reports any.
+    pub detail: Option<String>,
+    /// Whether this task survives the server exiting.
+    pub detached: bool,
+    pub pid: Option<u32>,
+}
+
 /// Event sent when a background task completes.
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskCompleted {

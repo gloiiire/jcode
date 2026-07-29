@@ -23,7 +23,7 @@ mod model;
 
 pub use model::{
     BackgroundCleanupResult, BackgroundTaskEventKind, BackgroundTaskEventRecord,
-    BackgroundTaskInfo, BackgroundTaskWaitReason, BackgroundTaskWaitResult,
+    BackgroundTaskInfo, BackgroundTaskSummary, BackgroundTaskWaitReason, BackgroundTaskWaitResult,
     RunningBackgroundProgress, TaskResult, TaskStatusFile, format_progress_display,
     format_progress_summary, render_progress_bar,
 };
@@ -1396,6 +1396,72 @@ impl BackgroundTaskManager {
             rows.iter().map(|row| row.label.clone()).collect(),
             latest,
         )
+    }
+
+    /// Everything still running for one session, in the shape a client renders.
+    ///
+    /// Two sources have to be unioned here, and missing either one leaves a hole:
+    /// in-process futures live in `self.tasks` and never touch disk until they
+    /// finish, while detached processes only ever exist as a status file —
+    /// `register_detached_task` deliberately does not insert into `self.tasks`,
+    /// so `running_snapshot` cannot see them.
+    ///
+    /// Dedup is by task id, preferring the in-memory entry, because a task that
+    /// was promoted to detached can briefly appear in both.
+    pub fn running_summaries_for_session(&self, session_id: &str) -> Vec<BackgroundTaskSummary> {
+        let mut summaries: Vec<BackgroundTaskSummary> = Vec::new();
+
+        if let Ok(tasks) = self.tasks.try_read() {
+            for task in tasks.values() {
+                if task.session_id != session_id {
+                    continue;
+                }
+                let status = std::fs::read_to_string(&task.status_path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<TaskStatusFile>(&content).ok());
+                let label = status
+                    .as_ref()
+                    .and_then(|status| status.display_name.clone())
+                    .or_else(|| task.display_name.clone())
+                    .unwrap_or_else(|| task.tool_name.clone());
+                summaries.push(BackgroundTaskSummary {
+                    task_id: task.task_id.clone(),
+                    tool_name: task.tool_name.clone(),
+                    label,
+                    detail: status
+                        .as_ref()
+                        .and_then(|status| status.progress.clone())
+                        .map(|progress| format_progress_display(&progress, 10)),
+                    detached: status.as_ref().map(|s| s.detached).unwrap_or(false),
+                    pid: status.as_ref().and_then(|s| s.pid),
+                });
+            }
+        }
+
+        for status in self.persisted_detached_running_tasks_for_session(session_id) {
+            if summaries.iter().any(|s| s.task_id == status.task_id) {
+                continue;
+            }
+            let label = status
+                .display_name
+                .clone()
+                .unwrap_or_else(|| status.tool_name.clone());
+            summaries.push(BackgroundTaskSummary {
+                task_id: status.task_id.clone(),
+                tool_name: status.tool_name.clone(),
+                label,
+                detail: status
+                    .progress
+                    .as_ref()
+                    .map(|progress| format_progress_display(progress, 10)),
+                detached: true,
+                pid: status.pid,
+            });
+        }
+
+        // Stable order so an unchanged set compares equal and does not redraw.
+        summaries.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        summaries
     }
 
     /// Best-effort synchronous lookup of detached tasks that are still running
