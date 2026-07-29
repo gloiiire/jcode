@@ -868,6 +868,27 @@ async fn handle_remote_key_internal(
             app.autocomplete();
         }
         KeyCode::Enter => {
+            // A command blocked on stdin owns the next Enter: the turn is
+            // suspended on the server waiting for this line, so answering it
+            // takes priority over submitting a new prompt. An empty line is a
+            // legitimate answer, so this runs before the is_empty() guard below.
+            if let Some(pending) = app.pending_stdin_request.take() {
+                let answer = std::mem::take(&mut app.input);
+                app.cursor_pos = 0;
+                remote
+                    .send_stdin_response(&pending.request_id, &format!("{answer}\n"))
+                    .await?;
+                app.push_display_message(DisplayMessage::system(format!(
+                    "⌨ Sent to the running command: {}",
+                    if answer.trim().is_empty() {
+                        "(empty line)".to_string()
+                    } else {
+                        answer
+                    }
+                )));
+                app.set_status_notice("⌨ Input sent");
+                return Ok(());
+            }
             if app.activate_picker_from_preview() {
                 return Ok(());
             }
