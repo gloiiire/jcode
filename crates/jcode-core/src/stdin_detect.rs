@@ -261,12 +261,10 @@ mod macos {
         pth_name: [u8; 64],
     }
 
-    // mach/thread_info.h: RUNNING 1, STOPPED 2, WAITING 3, UNINTERRUPTIBLE 4,
-    // HALTED 5. This was 2 (STOPPED), which a process blocked on read() never
-    // is, so stdin detection never fired on macOS.
-    // mach/thread_info.h: RUNNING 1, STOPPED 2, WAITING 3, UNINTERRUPTIBLE 4,
-    // HALTED 5.
-    const TH_STATE_WAITING: i32 = 3;
+    // Sourced from `libc` rather than hand-written, per #656: this was defined
+    // locally as 2, which is `TH_STATE_STOPPED`, so a thread blocked on read()
+    // never matched and macOS stdin detection never fired at all (#651).
+    use libc::TH_STATE_WAITING;
 
     /// sys/pipe.h: PIPE_WANTR, "reader wants some characters" — set while a
     /// reader is blocked on this pipe. This is the macOS counterpart to the
