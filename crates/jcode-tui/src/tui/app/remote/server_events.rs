@@ -2826,16 +2826,22 @@ pub(in crate::tui::app) fn handle_server_event(
                 return true;
             }
 
+            // A supplied prompt means the agent is asking the user something
+            // (the `ask_user` tool). An empty one means a child process is
+            // reading stdin and only the raw line matters. Same wire message,
+            // two very different things to say to the user.
             let prompt = prompt.trim().to_string();
-            let detail = if prompt.is_empty() {
-                String::new()
+            if prompt.is_empty() {
+                app.push_display_message(DisplayMessage::system(
+                    "⌨ A running command is waiting for input. Type your answer and press Enter to send it to the command.".to_string(),
+                ));
+                app.set_status_notice("⌨ Command is waiting for input — type and press Enter");
             } else {
-                format!("\n\n{prompt}")
-            };
-            app.push_display_message(DisplayMessage::system(format!(
-                "⌨ A running command is waiting for input. Type your answer and press Enter to send it to the command.{detail}"
-            )));
-            app.set_status_notice("⌨ Command is waiting for input — type and press Enter");
+                app.push_display_message(DisplayMessage::system(format!(
+                    "❓ {prompt}\n\nType your answer and press Enter."
+                )));
+                app.set_status_notice("❓ Waiting for your answer — type and press Enter");
+            }
             app.pending_stdin_request = Some(crate::tui::app::PendingStdinRequest {
                 request_id,
                 prompt,
