@@ -481,57 +481,83 @@ fn render_plaintext_lines(content: &str, wrap_width: usize) -> Vec<Line<'static>
     lines
 }
 
-/// Render the full agentgrep tool output inline beneath the tool summary line.
-/// Each output line is prefixed with a dim left border and indented so it reads
-/// as a nested block. Long lines are hard-split to the available width and the
-/// block is capped so a giant search result cannot flood the transcript.
-fn render_agentgrep_output_body(content: &str, row_width: usize) -> Vec<Line<'static>> {
-    const MAX_BODY_LINES: usize = 400;
+/// Render raw tool output inline beneath the tool summary line. Each output
+/// line is prefixed with a dim left border and indented so it reads as a nested
+/// block. Long lines are hard-split to the available width and the block is
+/// capped so a giant result cannot flood the transcript.
+///
+/// `mode` decides the budget. `Preview` splits it between the head and the tail
+/// so the end of a failing command stays visible; `Full` keeps the leading
+/// lines up to the flood cap.
+fn render_tool_output_body(
+    content: &str,
+    row_width: usize,
+    mode: crate::config::ToolOutputDisplayMode,
+) -> Vec<Line<'static>> {
+    let max_body_lines = mode.max_lines();
+    if max_body_lines == 0 {
+        return Vec::new();
+    }
     let border = "    │ ";
     let border_width = UnicodeWidthStr::width(border);
     let avail = row_width.saturating_sub(border_width).max(1);
 
-    let mut out: Vec<Line<'static>> = Vec::new();
     let source_lines: Vec<&str> = content.split('\n').collect();
+    // Drop a single trailing empty line so a normal "…\n" terminator does not
+    // render as a stray bordered blank row.
+    let source_lines: &[&str] = match source_lines.split_last() {
+        Some((last, rest)) if last.trim().is_empty() && !rest.is_empty() => rest,
+        _ => &source_lines,
+    };
     let total = source_lines.len();
-    let mut truncated_extra = 0usize;
 
-    for raw_line in source_lines {
-        if out.len() >= MAX_BODY_LINES {
-            truncated_extra = total.saturating_sub(out.len());
-            break;
-        }
+    // Pick which source lines survive. Wrapping happens afterwards, so a single
+    // very long line can still exceed the budget; the wrap loop re-checks.
+    let (head, tail) = if total <= max_body_lines {
+        (source_lines, &source_lines[total..])
+    } else if mode.keeps_tail() {
+        let tail_len = max_body_lines / 2;
+        let head_len = max_body_lines - tail_len;
+        (&source_lines[..head_len], &source_lines[total - tail_len..])
+    } else {
+        (&source_lines[..max_body_lines], &source_lines[total..])
+    };
+    let elided = total.saturating_sub(head.len() + tail.len());
+
+    let dim = Style::default().fg(dim_color());
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut push_source_line = |out: &mut Vec<Line<'static>>, raw_line: &str| {
         let raw_line = raw_line.trim_end_matches('\r');
         if raw_line.is_empty() {
-            out.push(Line::from(Span::styled(
-                border.to_string(),
-                Style::default().fg(dim_color()),
-            )));
-            continue;
+            out.push(Line::from(Span::styled(border.to_string(), dim)));
+            return;
         }
         if UnicodeWidthStr::width(raw_line) <= avail {
             out.push(Line::from(vec![
-                Span::styled(border.to_string(), Style::default().fg(dim_color())),
-                Span::styled(raw_line.to_string(), Style::default().fg(dim_color())),
+                Span::styled(border.to_string(), dim),
+                Span::styled(raw_line.to_string(), dim),
             ]));
         } else {
             for chunk in split_by_display_width(raw_line, avail) {
-                if out.len() >= MAX_BODY_LINES {
-                    break;
-                }
                 out.push(Line::from(vec![
-                    Span::styled(border.to_string(), Style::default().fg(dim_color())),
-                    Span::styled(chunk, Style::default().fg(dim_color())),
+                    Span::styled(border.to_string(), dim),
+                    Span::styled(chunk, dim),
                 ]));
             }
         }
-    }
+    };
 
-    if truncated_extra > 0 {
+    for raw_line in head {
+        push_source_line(&mut out, raw_line);
+    }
+    if elided > 0 {
         out.push(Line::from(Span::styled(
-            format!("    │ … {} more lines …", truncated_extra),
-            Style::default().fg(dim_color()),
+            format!("    │ … {} more lines …", elided),
+            dim,
         )));
+    }
+    for raw_line in tail {
+        push_source_line(&mut out, raw_line);
     }
 
     out
@@ -3998,16 +4024,33 @@ pub(crate) fn render_tool_message(
         lines.extend(discovery_lines);
     }
 
-    // Optionally render the full agentgrep search output inline in the
-    // transcript. Gated behind `display.show_agentgrep_output` (default false)
-    // so most users keep the compact one-line summary.
-    if tools_ui::canonical_tool_name(&tc.name) == "agentgrep"
-        && crate::config::config().display.show_agentgrep_output
-        && !msg.content.trim().is_empty()
-    {
-        for line in render_agentgrep_output_body(&msg.content, row_width) {
-            lines.push(line);
+    // Optionally echo the raw tool output inline in the transcript. Gated
+    // behind `display.tool_output` (default off) so most users keep the compact
+    // one-line summary. `display.show_agentgrep_output` stays an independent
+    // agentgrep-only override so existing configs behave exactly as before.
+    //
+    // Tools that already render their own body are excluded: edit-family tools
+    // draw an inline diff, and todo/gmail/discovery/batch draw cards or
+    // sub-rows. Echoing their raw output on top would duplicate them.
+    let tool_output_mode = {
+        let canonical = tools_ui::canonical_tool_name(&tc.name);
+        let display = &crate::config::config().display;
+        if canonical == "agentgrep" && display.show_agentgrep_output {
+            crate::config::ToolOutputDisplayMode::Full
+        } else if tools_ui::is_edit_tool_name(canonical)
+            || matches!(canonical, "todo" | "gmail" | "discover" | "batch")
+        {
+            crate::config::ToolOutputDisplayMode::Off
+        } else {
+            tools_ui::tool_output_mode()
         }
+    };
+    if !tool_output_mode.is_off() && !msg.content.trim().is_empty() {
+        lines.extend(render_tool_output_body(
+            &msg.content,
+            row_width,
+            tool_output_mode,
+        ));
     }
 
     // Fallback command preview on a second line only when the row has no

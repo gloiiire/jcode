@@ -11,7 +11,8 @@ pub use jcode_config_types::{
     NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig, NamedProviderType,
     NativeScrollbarConfig, NotificationsConfig, OverscrollStatusMode, PowerConfig, ProviderConfig,
     ReasoningDisplayMode, SafetyConfig, SessionPickerResumeAction, SponsorsConfig, SwarmSpawnMode,
-    SwarmStripLayout, TerminalConfig, UpdateChannel, WebSearchConfig, WebSearchEngine,
+    SwarmStripLayout, TerminalConfig, ToolOutputDisplayMode, UpdateChannel, WebSearchConfig,
+    WebSearchEngine,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};

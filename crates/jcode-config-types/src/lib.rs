@@ -264,6 +264,73 @@ impl ReasoningDisplayMode {
     }
 }
 
+/// How much of a tool's raw output to echo into the transcript underneath the
+/// one-line tool row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolOutputDisplayMode {
+    /// Never echo tool output; the summary row is all you get (default).
+    #[default]
+    Off,
+    /// Echo the head and tail of the output with a "… N more lines …" marker
+    /// in between, so a long build log stays glanceable.
+    Preview,
+    /// Echo the whole output, capped only by the transcript flood guard.
+    Full,
+}
+
+impl ToolOutputDisplayMode {
+    /// Lines to echo before the block is elided. `Preview` splits its budget
+    /// between the head and the tail; `Full` uses the flood cap.
+    pub const PREVIEW_LINES: usize = 12;
+    pub const FULL_LINES: usize = 400;
+
+    pub fn max_lines(self) -> usize {
+        match self {
+            Self::Off => 0,
+            Self::Preview => Self::PREVIEW_LINES,
+            Self::Full => Self::FULL_LINES,
+        }
+    }
+
+    pub fn is_off(self) -> bool {
+        matches!(self, Self::Off)
+    }
+
+    /// Whether an elided block keeps its tail. Previews do, so the end of a
+    /// failing command stays visible; a full block has nothing to elide.
+    pub fn keeps_tail(self) -> bool {
+        matches!(self, Self::Preview)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Preview => "Preview",
+            Self::Full => "Full",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Preview,
+            Self::Preview => Self::Full,
+            Self::Full => Self::Off,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "off" | "none" | "false" | "0" | "no" => Some(Self::Off),
+            "preview" | "short" | "head" | "compact" | "on" | "true" | "1" | "yes" => {
+                Some(Self::Preview)
+            }
+            "full" | "all" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
 /// Update channel: how aggressively to receive updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -1062,6 +1129,11 @@ pub struct DisplayConfig {
     /// just the one-line summary (default: false)
     #[serde(default)]
     pub show_agentgrep_output: bool,
+    /// Echo raw tool output (bash stdout, command results) into the transcript
+    /// under the tool row (default: off). `show_agentgrep_output` stays an
+    /// independent agentgrep-only override so existing configs keep working.
+    #[serde(default)]
+    pub tool_output: ToolOutputDisplayMode,
     /// Show the dimmed technical detail (command, path, args) after the
     /// model-provided intent on tool rows (default: false). When off, rows
     /// that have an intent show only the intent; rows without an intent
@@ -1080,6 +1152,12 @@ pub struct DisplayConfig {
     /// adapts jcode's palette for light backgrounds. Default: auto.
     #[serde(default)]
     pub theme: String,
+    /// Transcript colour palette: "default" (jcode's own), "claude" (Claude
+    /// Code's scheme as measured), or "claude-hc" (the same scheme raised to a
+    /// 7:1 WCAG AAA contrast floor). Independent of `theme`, which only picks
+    /// light vs dark. Default: default.
+    #[serde(default)]
+    pub palette: String,
     /// Opt-in active sessions manager: pressing Left arrow on an empty input
     /// opens a picker scoped to live (open) sessions, showing which are still
     /// working and which are ready for input (default: false). The `/active`
@@ -1120,10 +1198,12 @@ impl Default for DisplayConfig {
             compact_notifications: false,
             copy_badge_alt_label: String::new(),
             show_agentgrep_output: false,
+            tool_output: ToolOutputDisplayMode::Off,
             tool_call_details: false,
             native_scrollbars: NativeScrollbarConfig::default(),
             keybinding_hints: true,
             theme: String::new(),
+            palette: String::new(),
             active_sessions_manager: false,
             overscroll_status: OverscrollStatusMode::default(),
         }

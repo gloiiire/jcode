@@ -2827,6 +2827,111 @@ fn handle_tool_call_details_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
+fn handle_palette_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/palette" && !trimmed.starts_with("/palette ") {
+        return false;
+    }
+
+    let rest = trimmed.strip_prefix("/palette").unwrap_or_default().trim();
+    let current = jcode_tui_style::palette_preset();
+
+    if rest.is_empty() || matches!(rest, "show" | "status") {
+        let names = jcode_tui_style::PalettePreset::ALL
+            .iter()
+            .map(|preset| preset.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+        app.push_display_message(DisplayMessage::system(format!(
+            "Palette is currently {}.\n\nAvailable: {}.\n\n`claude` matches Claude Code's colours; `claude-hc` is the same scheme raised to a 7:1 WCAG AAA contrast floor, for when dimmed text is hard to read.\n\nUse /palette <name> or /palette cycle.",
+            current.label(),
+            names
+        )));
+        return true;
+    }
+
+    let preset = if matches!(rest, "cycle" | "next") {
+        let all = jcode_tui_style::PalettePreset::ALL;
+        let index = all.iter().position(|p| *p == current).unwrap_or(0);
+        all[(index + 1) % all.len()]
+    } else {
+        match jcode_tui_style::PalettePreset::parse(rest) {
+            Some(preset) => preset,
+            None => {
+                app.push_display_message(DisplayMessage::error(
+                    "Usage: /palette (show), /palette default, /palette claude, /palette claude-hc, or /palette cycle".to_string(),
+                ));
+                return true;
+            }
+        }
+    };
+
+    jcode_tui_style::set_palette(preset);
+    app.set_status_notice(format!("Palette: {}", preset.label()));
+    match crate::config::Config::set_palette(preset.label()) {
+        Ok(()) => app.push_display_message(DisplayMessage::system(format!(
+            "Saved palette: {}. Applied to this session immediately.",
+            preset.label()
+        ))),
+        Err(error) => app.push_display_message(DisplayMessage::error(format!(
+            "Applied palette {} for this session, but failed to save it as the default: {}",
+            preset.label(),
+            error
+        ))),
+    }
+
+    true
+}
+
+fn handle_tool_output_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/tool-output" && !trimmed.starts_with("/tool-output ") {
+        return false;
+    }
+
+    let rest = trimmed
+        .strip_prefix("/tool-output")
+        .unwrap_or_default()
+        .trim();
+
+    let current = crate::config::config().display.tool_output;
+
+    if rest.is_empty() || matches!(rest, "show" | "status") {
+        app.push_display_message(DisplayMessage::system(format!(
+            "Tool output is currently {}.\n\nWhen on, raw tool output (bash stdout, command results) renders inline under the tool row instead of only the one-line summary.\n\nUse /tool-output off, /tool-output preview, or /tool-output full to change it.",
+            current.label()
+        )));
+        return true;
+    }
+
+    let mode = if matches!(rest, "cycle" | "next") {
+        current.cycle()
+    } else {
+        match crate::config::ToolOutputDisplayMode::parse(rest) {
+            Some(mode) => mode,
+            None => {
+                app.push_display_message(DisplayMessage::error(
+                    "Usage: /tool-output (show), /tool-output off, /tool-output preview, /tool-output full, or /tool-output cycle".to_string(),
+                ));
+                return true;
+            }
+        }
+    };
+
+    app.set_status_notice(format!("Tool output: {}", mode.label()));
+    match crate::config::Config::set_tool_output(mode) {
+        Ok(()) => app.push_display_message(DisplayMessage::system(format!(
+            "Saved tool output: {}. Applied to this session immediately.",
+            mode.label()
+        ))),
+        Err(error) => app.push_display_message(DisplayMessage::error(format!(
+            "Applied tool output {} for this session, but failed to save it as the default: {}",
+            mode.label(),
+            error
+        ))),
+    }
+
+    true
+}
+
 fn handle_show_agentgrep_output_command(app: &mut App, trimmed: &str) -> bool {
     if trimmed != "/show-agentgrep-output" && !trimmed.starts_with("/show-agentgrep-output ") {
         return false;
@@ -3119,6 +3224,14 @@ pub(super) fn handle_config_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     if handle_compact_notifications_command(app, trimmed) {
+        return true;
+    }
+
+    if handle_palette_command(app, trimmed) {
+        return true;
+    }
+
+    if handle_tool_output_command(app, trimmed) {
         return true;
     }
 

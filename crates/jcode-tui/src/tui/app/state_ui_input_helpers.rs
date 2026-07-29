@@ -104,6 +104,14 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Show/toggle full agentgrep search output inline in chat",
     ),
     RegisteredCommand::public(
+        "/tool-output",
+        "Show/change raw tool output in the transcript (off/preview/full)",
+    ),
+    RegisteredCommand::public(
+        "/palette",
+        "Show/change the transcript colour palette (default/claude/claude-hc)",
+    ),
+    RegisteredCommand::public(
         "/tool-call-details",
         "Show/toggle dimmed technical details on tool rows with an intent",
     ),
@@ -1623,6 +1631,8 @@ impl App {
                 | "/alignment"
                 | "/compact-notifications"
                 | "/show-agentgrep-output"
+                | "/tool-output"
+                | "/palette"
                 | "/reasoning"
                 | "/thinking"
                 | "/thinking-display"

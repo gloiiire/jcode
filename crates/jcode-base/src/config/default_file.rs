@@ -175,11 +175,31 @@ prompt_entry_animation = true
 # results directly in the chat.
 # show_agentgrep_output = false
 
+# Echo raw tool output (bash stdout, command results) into the transcript under
+# the tool row, so you can read what a command actually printed without opening
+# /transcript.
+#   off     = only the one-line summary (default)
+#   preview = head and tail of the output with "… N more lines …" in between
+#   full    = the whole output, up to the flood cap
+# Tools that already draw their own body are unaffected: edit/write show their
+# inline diff, and todo/gmail/discovery/batch keep their cards and sub-rows.
+# tool_output = "off"
+
 # Show the dimmed technical detail (command, file path, args) next to the
 # model-provided intent on tool rows (default: false). When false, tool rows
 # with an intent show just the intent; rows without an intent still show the
 # technical detail.
 # tool_call_details = false
+
+# Transcript colour palette. Independent of `theme`, which only chooses light
+# vs dark rendering.
+#   default   = jcode's own colours
+#   claude    = Claude Code's scheme, sampled from its rendered output
+#   claude-hc = the same scheme with every colour raised to a 7:1 WCAG AAA
+#               contrast floor (hue and saturation preserved). Use this if
+#               dimmed text is hard to read; jcode's default dim sits at
+#               2.12:1 against a #191c21 background, below the 4.5:1 AA floor.
+# palette = "default"
 
 # Occasionally surface a "learn this keybinding" nudge (in a distinct color)
 # when you keep doing something the slow way (e.g. /resume) instead of using

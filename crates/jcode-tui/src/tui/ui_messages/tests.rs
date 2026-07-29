@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ToolOutputDisplayMode;
 
 fn extract_line_text(line: &Line<'_>) -> String {
     line.spans
@@ -2753,9 +2754,9 @@ fn render_tool_message_batch_subcall_shows_swarm_dm_details() {
 }
 
 #[test]
-fn render_agentgrep_output_body_borders_each_line() {
+fn render_tool_output_body_borders_each_line() {
     let content = "crates/foo.rs\n  symbols: 1 matched\n    - fn bar @ 1-5";
-    let lines = super::render_agentgrep_output_body(content, 120);
+    let lines = super::render_tool_output_body(content, 120, ToolOutputDisplayMode::Full);
     let rendered = lines
         .iter()
         .map(extract_line_text)
@@ -2775,16 +2776,183 @@ fn render_agentgrep_output_body_borders_each_line() {
 }
 
 #[test]
-fn render_agentgrep_output_body_caps_huge_output() {
+fn render_tool_output_body_caps_huge_output() {
     let content = (0..1000)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let lines = super::render_agentgrep_output_body(&content, 120);
+    let lines = super::render_tool_output_body(&content, 120, ToolOutputDisplayMode::Full);
     // 400-line cap plus a single truncation summary line.
     assert_eq!(lines.len(), 401, "should cap the body and add a summary");
     let last = extract_line_text(&lines[lines.len() - 1]);
     assert!(last.contains("more lines"), "last={last}");
+}
+
+/// The wiring test: a bash row must actually gain the output block when the
+/// setting is on. The body renderer is covered separately; this pins the call
+/// site, which is what was missing before.
+#[test]
+fn render_tool_message_echoes_bash_output_when_enabled() {
+    crate::tui::ui::tools_ui::tests_tool_output_override::set(ToolOutputDisplayMode::Preview);
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "compiling jcode\nwarning: unused import\ntest result: ok. 12 passed".to_string(),
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        title: None,
+        tool_data: Some(crate::message::ToolCall {
+            id: "call_bash".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({ "command": "cargo test", "intent": "Run the tests" }),
+            intent: Some("Run the tests".to_string()),
+            thought_signature: None,
+        }),
+    };
+
+    let rendered = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off)
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::tui::ui::tools_ui::tests_tool_output_override::set(ToolOutputDisplayMode::Off);
+
+    assert!(rendered.contains("bash · Run the tests"), "row: {rendered}");
+    assert!(
+        rendered.contains("│ compiling jcode"),
+        "output body missing: {rendered}"
+    );
+    assert!(
+        rendered.contains("│ test result: ok. 12 passed"),
+        "output body truncated: {rendered}"
+    );
+}
+
+/// Default stays quiet: no setting, no body.
+#[test]
+fn render_tool_message_keeps_bash_output_hidden_by_default() {
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "compiling jcode\ntest result: ok".to_string(),
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        title: None,
+        tool_data: Some(crate::message::ToolCall {
+            id: "call_bash".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({ "command": "cargo test", "intent": "Run the tests" }),
+            intent: Some("Run the tests".to_string()),
+            thought_signature: None,
+        }),
+    };
+
+    let rendered = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off)
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !rendered.contains("compiling jcode"),
+        "output must stay hidden by default: {rendered}"
+    );
+}
+
+/// Edit-family tools already draw an inline diff; echoing their raw output on
+/// top would duplicate it.
+#[test]
+fn render_tool_message_does_not_echo_output_for_edit_tools() {
+    crate::tui::ui::tools_ui::tests_tool_output_override::set(ToolOutputDisplayMode::Full);
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "UNIQUEMARKERTOKEN applied to src/main.rs".to_string(),
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        title: None,
+        tool_data: Some(crate::message::ToolCall {
+            id: "call_edit".to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({ "file_path": "src/main.rs" }),
+            intent: Some("Patch main".to_string()),
+            thought_signature: None,
+        }),
+    };
+
+    let rendered = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off)
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::tui::ui::tools_ui::tests_tool_output_override::set(ToolOutputDisplayMode::Off);
+
+    assert!(
+        !rendered.contains("UNIQUEMARKERTOKEN"),
+        "edit tools must not echo raw output: {rendered}"
+    );
+}
+
+#[test]
+fn render_tool_output_body_is_empty_when_off() {
+    let content = "one\ntwo\nthree";
+    let lines = super::render_tool_output_body(content, 120, ToolOutputDisplayMode::Off);
+    assert!(lines.is_empty(), "off must render nothing");
+}
+
+/// A preview keeps the tail so the end of a failing command stays visible,
+/// which is the whole point of previewing build output.
+#[test]
+fn render_tool_output_body_preview_keeps_head_and_tail() {
+    let content = (0..1000)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lines = super::render_tool_output_body(&content, 120, ToolOutputDisplayMode::Preview);
+    let rendered = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(
+        lines.len(),
+        ToolOutputDisplayMode::PREVIEW_LINES + 1,
+        "preview budget plus the elision marker"
+    );
+    assert!(rendered.contains("line 0"), "head missing: {rendered}");
+    assert!(rendered.contains("line 999"), "tail missing: {rendered}");
+    assert!(
+        rendered.contains("more lines"),
+        "elision marker missing: {rendered}"
+    );
+    let marker = lines
+        .iter()
+        .position(|line| extract_line_text(line).contains("more lines"))
+        .expect("elision marker");
+    assert!(
+        marker > 0 && marker < lines.len() - 1,
+        "marker must sit between head and tail, was at {marker}"
+    );
+}
+
+/// Short output must render whole, with no marker and no dropped lines.
+#[test]
+fn render_tool_output_body_preview_leaves_short_output_intact() {
+    let content = "one\ntwo\nthree";
+    let lines = super::render_tool_output_body(content, 120, ToolOutputDisplayMode::Preview);
+    let rendered = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(lines.len(), 3, "rendered={rendered}");
+    assert!(!rendered.contains("more lines"), "rendered={rendered}");
+}
+
+/// Command output almost always ends with a newline; that must not become a
+/// stray bordered blank row.
+#[test]
+fn render_tool_output_body_drops_single_trailing_newline() {
+    let lines = super::render_tool_output_body("one\ntwo\n", 120, ToolOutputDisplayMode::Full);
+    assert_eq!(lines.len(), 2);
 }
 
 #[test]

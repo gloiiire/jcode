@@ -39,6 +39,35 @@ pub(crate) mod tests_tool_call_details_override {
     }
 }
 
+/// How much raw tool output should be echoed under a tool row.
+#[cfg(not(test))]
+pub(crate) fn tool_output_mode() -> crate::config::ToolOutputDisplayMode {
+    crate::config::config().display.tool_output
+}
+
+#[cfg(test)]
+pub(crate) fn tool_output_mode() -> crate::config::ToolOutputDisplayMode {
+    tests_tool_output_override::get()
+}
+
+#[cfg(test)]
+pub(crate) mod tests_tool_output_override {
+    use crate::config::ToolOutputDisplayMode;
+    use std::cell::Cell;
+
+    thread_local! {
+        static MODE: Cell<ToolOutputDisplayMode> = const { Cell::new(ToolOutputDisplayMode::Off) };
+    }
+
+    pub(crate) fn get() -> ToolOutputDisplayMode {
+        MODE.with(Cell::get)
+    }
+
+    pub(crate) fn set(value: ToolOutputDisplayMode) {
+        MODE.with(|cell| cell.set(value));
+    }
+}
+
 fn infer_bg_action_from_intent_for_display(intent: Option<&str>) -> Option<&'static str> {
     let intent = intent?.trim().to_ascii_lowercase();
     if intent.is_empty() {

@@ -61,6 +61,7 @@ impl Config {
 - Redraw FPS: {}
 - Copy badge Alt label: {}
 - Show agentgrep output: {}
+- Tool output: {}
 - Tool call details: {}
 
 **Features:**
@@ -190,6 +191,7 @@ impl Config {
                 self.display.copy_badge_alt_label.trim()
             },
             self.display.show_agentgrep_output,
+            self.display.tool_output.label(),
             self.display.tool_call_details,
             self.features.memory,
             self.features.swarm,

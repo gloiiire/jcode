@@ -223,6 +223,27 @@ impl Config {
         Ok(())
     }
 
+    /// Update the persisted transcript palette preference.
+    pub fn set_palette(name: &str) -> anyhow::Result<()> {
+        let mut cfg = Self::load();
+        cfg.display.palette = name.to_string();
+        cfg.save()?;
+        crate::logging::info(&format!("Saved display.palette to config: {}", name));
+        Ok(())
+    }
+
+    /// Update the persisted tool-output display preference.
+    pub fn set_tool_output(mode: crate::config::ToolOutputDisplayMode) -> anyhow::Result<()> {
+        let mut cfg = Self::load();
+        cfg.display.tool_output = mode;
+        cfg.save()?;
+        crate::logging::info(&format!(
+            "Saved display.tool_output to config: {}",
+            mode.label()
+        ));
+        Ok(())
+    }
+
     /// Update the persisted show-agentgrep-output preference.
     pub fn set_show_agentgrep_output(show: bool) -> anyhow::Result<()> {
         let mut cfg = Self::load();

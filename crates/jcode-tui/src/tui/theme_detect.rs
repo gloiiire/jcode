@@ -24,7 +24,33 @@ static DETECTED: OnceLock<ThemeMode> = OnceLock::new();
 pub fn init_theme_mode() -> ThemeMode {
     let mode = *DETECTED.get_or_init(resolve_theme_mode);
     jcode_tui_style::set_theme_mode(mode);
+    init_palette();
     mode
+}
+
+/// Resolve and install the transcript colour palette.
+///
+/// Separate from the light/dark mode: the mode decides whether colours are
+/// flipped at frame time, the palette decides what the colours are. Cheap and
+/// idempotent, so it is safe to call again after the user switches at runtime.
+pub fn init_palette() -> jcode_tui_style::PalettePreset {
+    let configured = std::env::var("JCODE_PALETTE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| crate::config::config().display.palette.clone());
+
+    let preset = match jcode_tui_style::PalettePreset::parse(&configured) {
+        Some(preset) => preset,
+        None => {
+            crate::logging::info(&format!(
+                "Unknown palette '{}' (expected default/claude/claude-hc); using default",
+                configured.trim()
+            ));
+            jcode_tui_style::PalettePreset::default()
+        }
+    };
+    jcode_tui_style::set_palette(preset);
+    preset
 }
 
 /// Resolve the theme while resuming an already-active TUI after an `exec` handoff.
@@ -43,6 +69,7 @@ pub fn init_theme_mode_for_resume(inherited_theme: Option<&str>) -> ThemeMode {
     let mode = *DETECTED
         .get_or_init(|| inherited_theme.unwrap_or_else(resolve_theme_mode_without_terminal_query));
     jcode_tui_style::set_theme_mode(mode);
+    init_palette();
     mode
 }
 
