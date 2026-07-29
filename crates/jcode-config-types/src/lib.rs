@@ -264,6 +264,52 @@ impl ReasoningDisplayMode {
     }
 }
 
+/// When to stop and ask the user before running a tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolApprovalMode {
+    /// Never ask (default). Destructive commands are still handled by the
+    /// existing model-facing gate.
+    #[default]
+    Off,
+    /// Ask only for calls the risk assessment will not run immediately, and for
+    /// writes that land outside the session working directory.
+    Risky,
+    /// Ask before every mutating tool call.
+    All,
+}
+
+impl ToolApprovalMode {
+    pub fn is_off(self) -> bool {
+        matches!(self, Self::Off)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Risky => "Risky",
+            Self::All => "All",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Risky,
+            Self::Risky => Self::All,
+            Self::All => Self::Off,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "off" | "none" | "false" | "0" | "no" => Some(Self::Off),
+            "risky" | "risk" | "destructive" | "on" | "true" | "1" | "yes" => Some(Self::Risky),
+            "all" | "every" | "always" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 /// Update channel: how aggressively to receive updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "lowercase")]

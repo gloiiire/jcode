@@ -9,6 +9,7 @@ mod browser;
 mod communicate;
 #[cfg(target_os = "macos")]
 mod computer;
+pub mod confirm;
 mod conversation_search;
 mod debug_socket;
 mod discover;
@@ -22,6 +23,7 @@ mod memory;
 mod multiedit;
 mod open;
 mod patch;
+mod plan_mode;
 mod read;
 pub mod selfdev;
 pub(crate) mod serde_coerce;
@@ -81,6 +83,10 @@ pub(crate) fn clear_session_tool_policy(session_id: &str) {
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     policies.remove(session_id);
+    // Approvals and plan mode are keyed the same way and have the same
+    // lifetime, so they go with it rather than accumulating on a long-lived
+    // server.
+    confirm::clear_session_approvals(session_id);
 }
 
 fn session_tool_policy(session_id: &str) -> Option<SessionToolPolicy> {
@@ -159,6 +165,18 @@ impl Registry {
             let mut m = HashMap::new();
             Self::insert_tool_timed(&mut m, &mut timings, "read", read::ReadTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "ask_user", ask::AskUserTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "enter_plan_mode",
+                plan_mode::EnterPlanModeTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "propose_plan",
+                plan_mode::ProposePlanTool::new,
+            );
             Self::insert_tool_timed(&mut m, &mut timings, "write", write::WriteTool::new);
             Self::insert_tool_timed(
                 &mut m,
@@ -542,6 +560,97 @@ impl Registry {
     /// Even if we have room, a single output shouldn't dominate the context.
     const SINGLE_OUTPUT_MAX_FRACTION: f32 = 0.30;
 
+    /// Tools that change something outside jcode. Read-only tools are never
+    /// gated: asking about them would train the user to approve on reflex,
+    /// which is how an approval prompt stops being a safeguard.
+    fn is_mutating_tool(resolved_name: &str) -> bool {
+        matches!(
+            resolved_name,
+            "bash" | "write" | "edit" | "multiedit" | "patch" | "apply_patch"
+        )
+    }
+
+    /// The prompt to show before `resolved_name` runs, or `None` to run it
+    /// without asking.
+    fn approval_prompt_for(
+        resolved_name: &str,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> Option<String> {
+        let mode = crate::config::config().tools.approval;
+        if mode.is_off() || !Self::is_mutating_tool(resolved_name) {
+            return None;
+        }
+        if confirm::is_always_allowed(&ctx.session_id, resolved_name) {
+            return None;
+        }
+
+        let detail = Self::approval_detail(resolved_name, input);
+
+        if matches!(mode, crate::config::ToolApprovalMode::All) {
+            return Some(confirm::approval_prompt(resolved_name, &detail));
+        }
+
+        // Risky mode: only the calls that would not simply run.
+        let risky = if resolved_name == "bash" {
+            input
+                .get("command")
+                .and_then(|value| value.as_str())
+                .is_some_and(|command| {
+                    let risk_ctx =
+                        jcode_command_risk::RiskContext::from_env(ctx.working_dir.clone());
+                    !jcode_command_risk::assess(command, &risk_ctx)
+                        .level
+                        .runs_immediately()
+                })
+        } else {
+            Self::writes_outside_working_dir(input, ctx)
+        };
+
+        risky.then(|| confirm::approval_prompt(resolved_name, &detail))
+    }
+
+    /// Whether a file-touching call targets somewhere outside the session
+    /// working directory. Unknown paths count as outside: if we cannot tell
+    /// where a write lands, that is exactly when to ask.
+    fn writes_outside_working_dir(input: &Value, ctx: &ToolContext) -> bool {
+        let Some(working_dir) = ctx.working_dir.as_ref() else {
+            return true;
+        };
+        let Some(path) = input
+            .get("file_path")
+            .or_else(|| input.get("path"))
+            .and_then(|value| value.as_str())
+        else {
+            return true;
+        };
+        let resolved = ctx.resolve_path(std::path::Path::new(path));
+        // Compare lexically: the target usually does not exist yet, so
+        // canonicalize() would fail on exactly the writes worth checking.
+        !resolved.starts_with(working_dir)
+    }
+
+    /// The one line describing what is about to happen, shown in the prompt.
+    fn approval_detail(resolved_name: &str, input: &Value) -> String {
+        let field = if resolved_name == "bash" {
+            "command"
+        } else {
+            "file_path"
+        };
+        let raw = input
+            .get(field)
+            .or_else(|| input.get("path"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim();
+        const MAX: usize = 300;
+        if raw.chars().count() > MAX {
+            format!("{}…", raw.chars().take(MAX).collect::<String>())
+        } else {
+            raw.to_string()
+        }
+    }
+
     /// Execute a tool by name
     pub async fn execute(&self, name: &str, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let tools = self.tools.read().await;
@@ -575,6 +684,57 @@ impl Registry {
 
         // Drop the lock before executing
         drop(tools);
+
+        // Plan mode: the user asked for a plan, so refuse the tools that would
+        // act on the world and point the model back at proposing one.
+        if confirm::plan_mode(&ctx.session_id) && Self::is_mutating_tool(resolved_name) {
+            return Err(anyhow::anyhow!(
+                "This session is in plan mode, so `{resolved_name}` will not run. Finish \
+                 investigating with read-only tools, then call `propose_plan` with what you \
+                 intend to do and wait for the user to approve it."
+            ));
+        }
+
+        // Approval gate: stop and ask the user before this runs. Sessions with
+        // no attached client fall through untouched, so headless, ambient and
+        // swarm work behaves exactly as before.
+        if let Some(prompt) = Self::approval_prompt_for(resolved_name, &input, &ctx) {
+            match confirm::request_user_input(&ctx, format!("approve-{}", ctx.tool_call_id), prompt)
+                .await
+            {
+                Ok(answer) => match confirm::parse_decision(&answer) {
+                    confirm::Decision::Allow => {}
+                    confirm::Decision::AllowAlways => {
+                        confirm::remember_always_allowed(&ctx.session_id, resolved_name);
+                    }
+                    confirm::Decision::Deny(reason) => {
+                        let mut fields = Self::tool_lifecycle_fields(
+                            "denied",
+                            name,
+                            resolved_name,
+                            &input,
+                            &ctx,
+                        );
+                        fields.push(("deny_reason".to_string(), reason.clone()));
+                        crate::logging::event_warn("TOOL_LIFECYCLE", fields);
+                        return Err(anyhow::anyhow!(
+                            "The user did not approve this `{resolved_name}` call. {reason} \
+                             Do not retry it as-is; address what they said or ask them what to \
+                             do instead."
+                        ));
+                    }
+                },
+                // Nobody could be asked. Falling back to the previous behaviour
+                // keeps automation working; the model-facing destructive gate
+                // still applies underneath.
+                Err(error) => {
+                    crate::logging::info(&format!(
+                        "[tool] approval prompt skipped for {resolved_name}: {}",
+                        error.as_str()
+                    ));
+                }
+            }
+        }
 
         // User-configured pre_tool gate: external policy hook that can block
         // this call (exit 2). Skipped entirely when not configured.

@@ -273,6 +273,19 @@ profile = "full"
 # Use enabled = ["*"] to explicitly select the unrestricted full toolset.
 # Hide selected tools after applying the profile/allow-list.
 # disabled = ["browser", "gmail", "swarm"]
+
+# Stop and ask before a tool runs. Only mutating tools are ever gated (bash,
+# write, edit, multiedit, patch, apply_patch) — prompting for reads would train
+# you to approve on reflex.
+#   off   = never ask (default); the model-facing destructive gate still applies
+#   risky = ask for commands the risk assessment will not run immediately, and
+#           for writes landing outside the session working directory
+#   all   = ask before every mutating call
+# At the prompt, Enter alone approves; "2" approves and stops asking for that
+# tool this session; anything else refuses and is passed to the agent as your
+# reason. Sessions with no attached client (headless, ambient, swarm workers)
+# never prompt and behave exactly as before.
+# approval = "off"
 # Disable all built-in tools unless enabled is set.
 disable_base_tools = false
 

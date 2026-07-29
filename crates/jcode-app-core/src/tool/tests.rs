@@ -716,3 +716,107 @@ async fn gemini_build_tools_from_registry_definitions_omits_const_keywords() {
         "const"
     ));
 }
+
+mod approval_gate {
+    use super::*;
+    use crate::tool::confirm;
+    use jcode_tool_core::ToolExecutionMode;
+    use serde_json::json;
+
+    fn ctx_in(session: &str, working_dir: Option<&str>) -> ToolContext {
+        ToolContext {
+            session_id: session.to_string(),
+            message_id: "m".to_string(),
+            tool_call_id: "t".to_string(),
+            working_dir: working_dir.map(std::path::PathBuf::from),
+            stdin_request_tx: None,
+            graceful_shutdown_signal: None,
+            execution_mode: ToolExecutionMode::AgentTurn,
+        }
+    }
+
+    /// Read-only tools are never gated. Prompting for them would train the user
+    /// to approve on reflex, which is how an approval prompt stops working.
+    #[test]
+    fn only_mutating_tools_are_gated() {
+        for tool in ["bash", "write", "edit", "multiedit", "patch", "apply_patch"] {
+            assert!(Registry::is_mutating_tool(tool), "{tool} should be gated");
+        }
+        for tool in ["read", "ls", "agentgrep", "websearch", "todo", "ask_user"] {
+            assert!(
+                !Registry::is_mutating_tool(tool),
+                "{tool} must not be gated"
+            );
+        }
+    }
+
+    /// A write whose destination cannot be determined is treated as outside the
+    /// working directory: not knowing where it lands is exactly when to ask.
+    #[test]
+    fn an_undeterminable_write_target_counts_as_outside() {
+        let ctx = ctx_in("approval-unknown", Some("/tmp/project"));
+        assert!(Registry::writes_outside_working_dir(&json!({}), &ctx));
+        assert!(Registry::writes_outside_working_dir(
+            &json!({ "content": "x" }),
+            &ctx
+        ));
+        // No working directory at all: nothing to be inside of.
+        let ctx = ctx_in("approval-nowd", None);
+        assert!(Registry::writes_outside_working_dir(
+            &json!({ "file_path": "/tmp/project/src/main.rs" }),
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn a_write_inside_the_working_dir_is_not_flagged() {
+        let ctx = ctx_in("approval-inside", Some("/tmp/project"));
+        assert!(!Registry::writes_outside_working_dir(
+            &json!({ "file_path": "/tmp/project/src/main.rs" }),
+            &ctx
+        ));
+        assert!(!Registry::writes_outside_working_dir(
+            &json!({ "file_path": "src/main.rs" }),
+            &ctx
+        ));
+        assert!(Registry::writes_outside_working_dir(
+            &json!({ "file_path": "/etc/hosts" }),
+            &ctx
+        ));
+    }
+
+    /// Off is the default and must stay a true no-op, otherwise upgrading jcode
+    /// silently starts interrupting people.
+    #[test]
+    fn approval_is_off_by_default() {
+        let ctx = ctx_in("approval-default", Some("/tmp/project"));
+        assert!(crate::config::config().tools.approval.is_off());
+        assert!(
+            Registry::approval_prompt_for("bash", &json!({ "command": "rm -rf /" }), &ctx)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_session_approval_silences_later_prompts_for_that_tool() {
+        let session = "approval-remember";
+        confirm::clear_session_approvals(session);
+        assert!(!confirm::is_always_allowed(session, "bash"));
+        confirm::remember_always_allowed(session, "bash");
+        assert!(confirm::is_always_allowed(session, "bash"));
+        assert!(!confirm::is_always_allowed(session, "write"));
+        confirm::clear_session_approvals(session);
+    }
+
+    /// Clearing a session must drop plan mode too, or a resumed session id
+    /// would come back silently unable to edit anything.
+    #[test]
+    fn clearing_a_session_drops_plan_mode_and_approvals() {
+        let session = "approval-clear";
+        confirm::set_plan_mode(session, true);
+        confirm::remember_always_allowed(session, "bash");
+        clear_session_tool_policy(session);
+        assert!(!confirm::plan_mode(session));
+        assert!(!confirm::is_always_allowed(session, "bash"));
+    }
+}

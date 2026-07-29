@@ -104,6 +104,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Show/toggle full agentgrep search output inline in chat",
     ),
     RegisteredCommand::public(
+        "/approval",
+        "Show/change when jcode asks before running a tool (off/risky/all)",
+    ),
+    RegisteredCommand::public(
         "/tool-call-details",
         "Show/toggle dimmed technical details on tool rows with an intent",
     ),
@@ -1623,6 +1627,7 @@ impl App {
                 | "/alignment"
                 | "/compact-notifications"
                 | "/show-agentgrep-output"
+                | "/approval"
                 | "/reasoning"
                 | "/thinking"
                 | "/thinking-display"

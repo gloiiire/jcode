@@ -223,6 +223,15 @@ impl Config {
         Ok(())
     }
 
+    /// Update the persisted tool-approval preference.
+    pub fn set_tool_approval(mode: crate::config::ToolApprovalMode) -> anyhow::Result<()> {
+        let mut cfg = Self::load();
+        cfg.tools.approval = mode;
+        cfg.save()?;
+        crate::logging::info(&format!("Saved tools.approval to config: {}", mode.label()));
+        Ok(())
+    }
+
     /// Update the persisted show-agentgrep-output preference.
     pub fn set_show_agentgrep_output(show: bool) -> anyhow::Result<()> {
         let mut cfg = Self::load();
