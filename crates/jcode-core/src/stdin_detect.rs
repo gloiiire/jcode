@@ -261,7 +261,89 @@ mod macos {
         pth_name: [u8; 64],
     }
 
-    const TH_STATE_WAITING: i32 = 2;
+    // mach/thread_info.h: RUNNING 1, STOPPED 2, WAITING 3, UNINTERRUPTIBLE 4,
+    // HALTED 5. This was 2 (STOPPED), which a process blocked on read() never
+    // is, so stdin detection never fired on macOS.
+    // mach/thread_info.h: RUNNING 1, STOPPED 2, WAITING 3, UNINTERRUPTIBLE 4,
+    // HALTED 5.
+    const TH_STATE_WAITING: i32 = 3;
+
+    /// sys/pipe.h: PIPE_WANTR, "reader wants some characters" — set while a
+    /// reader is blocked on this pipe. This is the macOS counterpart to the
+    /// Linux `/proc/PID/syscall` check: it says a read is actually pending,
+    /// rather than merely that the process is asleep for some reason.
+    const PIPE_WANTR: i32 = 0x008;
+
+    #[repr(C)]
+    struct vinfo_stat {
+        vst_dev: u32,
+        vst_mode: u16,
+        vst_nlink: u16,
+        vst_ino: u64,
+        vst_uid: u32,
+        vst_gid: u32,
+        vst_atime: i64,
+        vst_atimensec: i64,
+        vst_mtime: i64,
+        vst_mtimensec: i64,
+        vst_ctime: i64,
+        vst_ctimensec: i64,
+        vst_birthtime: i64,
+        vst_birthtimensec: i64,
+        vst_size: i64,
+        vst_blocks: i64,
+        vst_blksize: i32,
+        vst_flags: u32,
+        vst_gen: u32,
+        vst_rdev: u32,
+        vst_qspare: [i64; 2],
+    }
+
+    #[repr(C)]
+    struct proc_fileinfo {
+        fi_openflags: u32,
+        fi_status: u32,
+        fi_offset: i64,
+        fi_type: i32,
+        fi_guardflags: u32,
+    }
+
+    #[repr(C)]
+    struct pipe_info {
+        pipe_stat: vinfo_stat,
+        pipe_handle: u64,
+        pipe_peerhandle: u64,
+        pipe_status: i32,
+        rfu_1: i32,
+    }
+
+    #[repr(C)]
+    struct pipe_fdinfo {
+        pfi: proc_fileinfo,
+        pipeinfo: pipe_info,
+    }
+
+    /// Whether a reader is blocked on the pipe behind fd 0.
+    ///
+    /// `None` when fd 0 is not a pipe (a pty, say) or the query fails, so the
+    /// caller can fall back instead of treating "cannot tell" as "no".
+    fn pipe_reader_is_blocked(pid: i32) -> Option<bool> {
+        let mut info: pipe_fdinfo = unsafe { mem::zeroed() };
+        let size = mem::size_of::<pipe_fdinfo>() as i32;
+        let ret = unsafe {
+            proc_pidfdinfo(
+                pid,
+                0,
+                PROC_PIDFDPIPEINFO,
+                &mut info as *mut pipe_fdinfo as *mut libc::c_void,
+                size,
+            )
+        };
+        if ret != size {
+            return None;
+        }
+        Some(info.pipeinfo.pipe_status & PIPE_WANTR != 0)
+    }
 
     pub fn check(pid: u32) -> StdinState {
         // Check if fd 0 (stdin) is a pipe or pty
@@ -269,8 +351,21 @@ mod macos {
             return StdinState::NotReading;
         }
 
-        // Check thread states - if any thread is in WAITING state,
-        // the process might be blocked on I/O
+        // Precise path: the pipe itself records whether a reader is blocked on
+        // it. Prefer this whenever fd 0 is a pipe, which is the case for every
+        // command jcode runs.
+        if let Some(blocked) = pipe_reader_is_blocked(pid as i32) {
+            return if blocked {
+                StdinState::Reading
+            } else {
+                StdinState::NotReading
+            };
+        }
+
+        // Fallback for a pty, where there is no pipe to interrogate. A waiting
+        // thread is weak evidence — a sleeping process waits too — so this can
+        // over-report, which is why it is only used when the precise check is
+        // unavailable.
         if is_thread_waiting(pid as i32) {
             return StdinState::Reading;
         }
