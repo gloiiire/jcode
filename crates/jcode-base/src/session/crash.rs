@@ -639,6 +639,79 @@ pub fn find_session_by_name_or_id(name_or_id: &str) -> Result<String> {
     Ok(matches[0].0.clone())
 }
 
+/// Find the newest session that was started in `working_dir`.
+///
+/// This backs `jcode -c`. Sessions live in one flat global directory with no
+/// per-project partition — unlike Claude Code, which files them under the
+/// project — so the directory filter has to happen here rather than falling out
+/// of the storage layout.
+///
+/// Matching is exact on the normalized path, not prefix-based. A prefix match
+/// would let a session from a subdirectory answer for its parent, which is how
+/// `-c` in a repo root would end up resuming a session belonging to one crate.
+///
+/// Returns `Ok(None)` when the directory has no session to resume, so the caller
+/// can say so instead of silently opening an unrelated one. Debug sessions and
+/// sessions with no messages are skipped: neither is something a person meant to
+/// come back to.
+pub fn find_latest_session_for_working_dir(working_dir: &str) -> Result<Option<String>> {
+    let sessions_dir = storage::jcode_dir()?.join("sessions");
+    if !sessions_dir.exists() {
+        return Ok(None);
+    }
+
+    let target = jcode_session_types::normalize_path_for_session_search_match(working_dir);
+    if target.is_empty() {
+        return Ok(None);
+    }
+
+    // First pass over the cheap header stubs: no transcript is parsed here, which
+    // matters because this directory routinely holds hundreds of sessions.
+    let mut candidates: Vec<(String, DateTime<Utc>)> = Vec::new();
+    for entry in std::fs::read_dir(&sessions_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.extension().map(|e| e == "json").unwrap_or(false) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(session) = Session::load_startup_stub(stem).or_else(|_| Session::load(stem)) else {
+            continue;
+        };
+        if session.is_debug {
+            continue;
+        }
+        let Some(dir) = session.working_dir.as_deref() else {
+            continue;
+        };
+        if jcode_session_types::normalize_path_for_session_search_match(dir) != target {
+            continue;
+        }
+        // `last_active_at` is only set once a session has actually been attached
+        // to; fall back to `updated_at` so a session that was never re-opened
+        // still orders correctly.
+        let recency = session.last_active_at.unwrap_or(session.updated_at);
+        candidates.push((stem.to_string(), recency));
+    }
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Second pass, newest first: the stub carries no message count, so emptiness
+    // costs a full load. Stopping at the first non-empty session means the common
+    // case pays for exactly one.
+    for (stem, _) in candidates {
+        if let Ok(session) = Session::load(&stem)
+            && !session.messages.is_empty()
+        {
+            return Ok(Some(stem));
+        }
+    }
+
+    Ok(None)
+}
+
 #[cfg(test)]
 mod batch_crash_tests {
     use super::*;
@@ -682,6 +755,115 @@ mod batch_crash_tests {
         );
 
         crate::env::remove_var("JCODE_HOME");
+    }
+
+    /// Build a saved session sitting in `working_dir`, with `messages` user turns.
+    fn seed_session_in_dir(
+        id: &str,
+        working_dir: &str,
+        messages: usize,
+    ) -> anyhow::Result<Session> {
+        let mut session = Session::create_with_id(id.to_string(), None, None);
+        session.working_dir = Some(working_dir.to_string());
+        for _ in 0..messages {
+            session.add_message(
+                Role::User,
+                vec![ContentBlock::Text {
+                    text: "hi".to_string(),
+                    cache_control: None,
+                }],
+            );
+        }
+        session.save()?;
+        Ok(session)
+    }
+
+    #[test]
+    fn continue_picks_the_newest_session_in_this_directory() -> anyhow::Result<()> {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir()?;
+        crate::env::set_var("JCODE_HOME", temp.path());
+
+        let here = "/tmp/project-here";
+        let mut older = seed_session_in_dir("session_older", here, 1)?;
+        let mut newer = seed_session_in_dir("session_newer", here, 1)?;
+        // Order by the stored timestamps rather than by save order, so the test
+        // does not depend on filesystem mtime resolution.
+        older.updated_at = Utc::now() - Duration::hours(2);
+        older.save()?;
+        newer.updated_at = Utc::now();
+        newer.save()?;
+
+        let found = find_latest_session_for_working_dir(here)?;
+        assert_eq!(found.as_deref(), Some("session_newer"));
+
+        crate::env::remove_var("JCODE_HOME");
+        Ok(())
+    }
+
+    /// A session from a *subdirectory* must not answer for its parent. Running
+    /// the test suite alone litters the store with sessions whose working_dir is
+    /// some crate subdirectory; a prefix match would make `-c` at the repo root
+    /// resume one of those instead of the user's actual session.
+    #[test]
+    fn continue_does_not_match_sessions_from_subdirectories() -> anyhow::Result<()> {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir()?;
+        crate::env::set_var("JCODE_HOME", temp.path());
+
+        seed_session_in_dir("session_in_child", "/tmp/repo/crates/inner", 1)?;
+
+        assert_eq!(find_latest_session_for_working_dir("/tmp/repo")?, None);
+
+        crate::env::remove_var("JCODE_HOME");
+        Ok(())
+    }
+
+    /// Nothing to resume must stay `None` rather than falling through to some
+    /// other directory's session, which is what makes the CLI able to say so.
+    #[test]
+    fn continue_reports_nothing_when_the_directory_has_no_session() -> anyhow::Result<()> {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir()?;
+        crate::env::set_var("JCODE_HOME", temp.path());
+
+        seed_session_in_dir("session_elsewhere", "/tmp/some-other-project", 1)?;
+
+        assert_eq!(
+            find_latest_session_for_working_dir("/tmp/empty-project")?,
+            None
+        );
+
+        crate::env::remove_var("JCODE_HOME");
+        Ok(())
+    }
+
+    /// Empty and debug sessions are skipped: a bare launch that was quit without
+    /// asking anything, or a debug session, is not what "continue" means.
+    #[test]
+    fn continue_skips_empty_and_debug_sessions() -> anyhow::Result<()> {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir()?;
+        crate::env::set_var("JCODE_HOME", temp.path());
+
+        let here = "/tmp/project-mixed";
+        let mut real = seed_session_in_dir("session_real", here, 2)?;
+        real.updated_at = Utc::now() - Duration::hours(1);
+        real.save()?;
+
+        // Newer than the real one, but with nothing in it.
+        seed_session_in_dir("session_empty", here, 0)?;
+
+        // Newer still, but a debug session.
+        let mut debug = seed_session_in_dir("session_debug", here, 3)?;
+        debug.is_debug = true;
+        debug.save()?;
+
+        let found = find_latest_session_for_working_dir(here)?;
+        assert_eq!(found.as_deref(), Some("session_real"));
+
+        crate::env::remove_var("JCODE_HOME");
+        Ok(())
     }
 
     #[test]

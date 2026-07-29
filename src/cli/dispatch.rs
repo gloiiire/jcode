@@ -549,6 +549,32 @@ fn auth_doctor_provider_arg<'a>(
 }
 
 fn resolve_resume_arg(args: &mut Args) -> Result<()> {
+    // `-c` is sugar for `--resume <newest id for this directory>`. Resolving it
+    // into `args.resume` here means every downstream consumer — the process
+    // title, the update-check suppression, `run_tui_client`, the server-side
+    // Subscribe — keeps working unchanged.
+    //
+    // `--cwd` has already been applied by `parse_and_prepare_args`, so the
+    // process cwd is the effective one at this point.
+    if args.continue_session {
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        match session::find_latest_session_for_working_dir(&cwd)? {
+            Some(full_id) => {
+                args.resume = Some(full_id);
+            }
+            None => {
+                eprintln!("Error: no session found for {}", cwd);
+                if !output::quiet_enabled() {
+                    eprintln!("\nUse `jcode --resume` to pick from all sessions.");
+                }
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     if let Some(ref resume_id) = args.resume {
         if resume_id.is_empty() {
             return tui_launch::list_sessions();

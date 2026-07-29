@@ -63,6 +63,16 @@ pub(crate) struct Args {
     #[arg(long, global = true, num_args = 0..=1, default_missing_value = "")]
     pub(crate) resume: Option<String>,
 
+    /// Continue the most recent session for the current directory, without the picker.
+    /// Note the case: `-c` is continue, `-C` is `--cwd`.
+    #[arg(
+        short = 'c',
+        long = "continue",
+        global = true,
+        conflicts_with = "resume"
+    )]
+    pub(crate) continue_session: bool,
+
     /// Internal: launched as a freshly spawned window, so skip heavy local resume bootstrap.
     #[arg(long, global = true, hide = true)]
     pub(crate) fresh_spawn: bool,
