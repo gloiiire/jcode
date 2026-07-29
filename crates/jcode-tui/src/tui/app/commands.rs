@@ -2827,6 +2827,52 @@ fn handle_tool_call_details_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
+fn handle_tool_approval_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed != "/approval" && !trimmed.starts_with("/approval ") {
+        return false;
+    }
+
+    let rest = trimmed.strip_prefix("/approval").unwrap_or_default().trim();
+    let current = crate::config::config().tools.approval;
+
+    if rest.is_empty() || matches!(rest, "show" | "status") {
+        app.push_display_message(DisplayMessage::system(format!(
+            "Tool approval is currently {}.\n\nWhen on, jcode stops and asks before a mutating tool runs (bash, write, edit, multiedit, patch, apply_patch). `risky` asks only for commands that would not simply run and for writes outside the working directory; `all` asks every time.\n\nUse /approval off, /approval risky, or /approval all.",
+            current.label()
+        )));
+        return true;
+    }
+
+    let mode = if matches!(rest, "cycle" | "next") {
+        current.cycle()
+    } else {
+        match crate::config::ToolApprovalMode::parse(rest) {
+            Some(mode) => mode,
+            None => {
+                app.push_display_message(DisplayMessage::error(
+                    "Usage: /approval (show), /approval off, /approval risky, /approval all, or /approval cycle".to_string(),
+                ));
+                return true;
+            }
+        }
+    };
+
+    app.set_status_notice(format!("Tool approval: {}", mode.label()));
+    match crate::config::Config::set_tool_approval(mode) {
+        Ok(()) => app.push_display_message(DisplayMessage::system(format!(
+            "Saved tool approval: {}. Applied to this session immediately.",
+            mode.label()
+        ))),
+        Err(error) => app.push_display_message(DisplayMessage::error(format!(
+            "Applied tool approval {} for this session, but failed to save it as the default: {}",
+            mode.label(),
+            error
+        ))),
+    }
+
+    true
+}
+
 fn handle_palette_command(app: &mut App, trimmed: &str) -> bool {
     if trimmed != "/palette" && !trimmed.starts_with("/palette ") {
         return false;
@@ -3224,6 +3270,10 @@ pub(super) fn handle_config_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     if handle_compact_notifications_command(app, trimmed) {
+        return true;
+    }
+
+    if handle_tool_approval_command(app, trimmed) {
         return true;
     }
 

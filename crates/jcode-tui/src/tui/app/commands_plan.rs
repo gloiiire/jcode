@@ -34,13 +34,17 @@ pub(super) fn build_plan_prompt(goal: Option<&str>) -> String {
         "You are entering planning mode.\n\
 \n\
 {}\
+First call the `enter_plan_mode` tool. It refuses editing and command-running for the rest of this session until a plan is approved, so you cannot drift into implementing by accident.\n\
+\n\
 Your job is to produce a clear, concrete, actionable plan. Do NOT implement anything yet: do not edit files, write patches, or change git state. You may freely read, search, run read-only commands, and analyze the codebase so the plan is grounded in how things actually work.\n\
 \n\
 When the plan is ready, present it directly in your reply inside a fenced code block whose language is `plan` (```plan ... ```). The UI renders that block as a dedicated plan card. Structure the plan inside the block with these sections: a top-level `# <short plan title>` heading, then Goal, Scope / affected areas, Approach (concrete ordered steps), Validation (how each part will be verified), and Open questions / decisions.\n\
 \n\
-Keep it tight and high-signal. Avoid speculative rewrites and busywork. After presenting the plan card, stop and wait for the user. Do not start implementing.\n\
+Keep it tight and high-signal. Avoid speculative rewrites and busywork.\n\
 \n\
-Only once the user approves, use the `todo` tool to turn the plan into an executable todo list and then begin the work.",
+After presenting the plan card, call the `propose_plan` tool with the same plan to put it to the user. Do not start implementing. If they refuse, you get their reasoning and plan mode stays on: revise and propose again.\n\
+\n\
+Only once they approve, use the `todo` tool to turn the plan into an executable todo list and then begin the work.",
         goal_line,
     )
 }
@@ -111,6 +115,9 @@ mod tests {
         assert!(prompt.contains("Do NOT implement anything yet"));
         assert!(prompt.contains("```plan"));
         assert!(prompt.contains("`todo`"));
+        // The prompt must drive the enforced path, not just ask nicely.
+        assert!(prompt.contains("enter_plan_mode"));
+        assert!(prompt.contains("propose_plan"));
 
         let bare = build_plan_prompt(None);
         assert!(bare.contains("currently in focus in this session"));

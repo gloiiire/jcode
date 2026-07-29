@@ -11,8 +11,8 @@ pub use jcode_config_types::{
     NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig, NamedProviderType,
     NativeScrollbarConfig, NotificationsConfig, OverscrollStatusMode, PowerConfig, ProviderConfig,
     ReasoningDisplayMode, SafetyConfig, SessionPickerResumeAction, SponsorsConfig, SwarmSpawnMode,
-    SwarmStripLayout, TerminalConfig, ToolOutputDisplayMode, UpdateChannel, WebSearchConfig,
-    WebSearchEngine,
+    SwarmStripLayout, TerminalConfig, ToolApprovalMode, ToolOutputDisplayMode, UpdateChannel,
+    WebSearchConfig, WebSearchEngine,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -553,6 +553,9 @@ pub struct ToolConfig {
     pub disabled: Vec<String>,
     /// Disable all built-in tools unless `enabled` is provided.
     pub disable_base_tools: bool,
+    /// Stop and ask the user before running a tool: "off" (default), "risky",
+    /// or "all". Sessions with no attached client never prompt.
+    pub approval: ToolApprovalMode,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

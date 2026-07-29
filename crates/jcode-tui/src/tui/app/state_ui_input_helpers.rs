@@ -112,6 +112,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Show/change the transcript colour palette (default/claude/claude-hc)",
     ),
     RegisteredCommand::public(
+        "/approval",
+        "Show/change when jcode asks before running a tool (off/risky/all)",
+    ),
+    RegisteredCommand::public(
         "/tool-call-details",
         "Show/toggle dimmed technical details on tool rows with an intent",
     ),
@@ -1633,6 +1637,7 @@ impl App {
                 | "/show-agentgrep-output"
                 | "/tool-output"
                 | "/palette"
+                | "/approval"
                 | "/reasoning"
                 | "/thinking"
                 | "/thinking-display"
