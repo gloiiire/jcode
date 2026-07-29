@@ -2809,9 +2809,39 @@ pub(in crate::tui::app) fn handle_server_event(
             }
             false
         }
-        ServerEvent::StdinRequest { .. } => {
-            app.set_status_notice("⌨ Interactive terminal detected (command will timeout)");
-            false
+        ServerEvent::StdinRequest {
+            request_id,
+            prompt,
+            is_password,
+            ..
+        } => {
+            if is_password {
+                // The composer has no masking, so collecting this would echo the
+                // secret into the transcript and the terminal scrollback. Leave
+                // the command to time out rather than leak it.
+                app.set_status_notice("⌨ Command is asking for a password — not supported here");
+                app.push_display_message(DisplayMessage::system(
+                    "A command is prompting for a password. jcode's terminal UI cannot collect it without echoing it, so the prompt was declined and the command will time out.\n\nRun the command yourself, or pass the secret through the environment.".to_string(),
+                ));
+                return true;
+            }
+
+            let prompt = prompt.trim().to_string();
+            let detail = if prompt.is_empty() {
+                String::new()
+            } else {
+                format!("\n\n{prompt}")
+            };
+            app.push_display_message(DisplayMessage::system(format!(
+                "⌨ A running command is waiting for input. Type your answer and press Enter to send it to the command.{detail}"
+            )));
+            app.set_status_notice("⌨ Command is waiting for input — type and press Enter");
+            app.pending_stdin_request = Some(crate::tui::app::PendingStdinRequest {
+                request_id,
+                prompt,
+                is_password,
+            });
+            true
         }
         _ => false,
     }

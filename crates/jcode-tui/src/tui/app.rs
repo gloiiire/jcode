@@ -822,6 +822,23 @@ struct CostState {
     cached_price_model: Option<String>,
 }
 
+/// A running command is blocked reading stdin and the server is waiting for us
+/// to supply a line.
+///
+/// The tool suspends on a `oneshot` on the server side, so this is a real block
+/// on the turn: until a `StdinResponse` comes back the command sits there. The
+/// desktop client has always answered these; the TUI used to only print a
+/// notice and let the command time out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingStdinRequest {
+    pub(crate) request_id: String,
+    pub(crate) prompt: String,
+    /// Set when the child is reading a secret. The composer echoes what it is
+    /// given and has no masking, so these are declined rather than collected in
+    /// the clear.
+    pub(crate) is_password: bool,
+}
+
 /// State for an in-progress OAuth/API-key login flow triggered by `/login`.
 /// TUI Application state
 pub struct App {
@@ -1584,6 +1601,9 @@ pub struct App {
     /// When to show the overscroll status line: off, always on, or the elastic
     /// overscroll reveal (default). From `display.overscroll_status` config.
     overscroll_status_mode: crate::config::OverscrollStatusMode,
+    /// Set while a running command waits on stdin; the next Enter answers it
+    /// instead of submitting a prompt.
+    pub(crate) pending_stdin_request: Option<PendingStdinRequest>,
     /// Scroll offset for changelog overlay (None = not visible)
     changelog_scroll: Option<usize>,
     help_scroll: Option<usize>,
