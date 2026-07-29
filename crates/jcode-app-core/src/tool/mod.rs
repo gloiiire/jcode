@@ -1,6 +1,7 @@
 mod agentgrep;
 pub mod ambient;
 mod apply_patch;
+mod ask;
 mod bash;
 mod batch;
 mod bg;
@@ -157,6 +158,7 @@ impl Registry {
             let mut timings = Vec::new();
             let mut m = HashMap::new();
             Self::insert_tool_timed(&mut m, &mut timings, "read", read::ReadTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "ask_user", ask::AskUserTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "write", write::WriteTool::new);
             Self::insert_tool_timed(
                 &mut m,

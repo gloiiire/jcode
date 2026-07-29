@@ -37,12 +37,45 @@ fn stdin_request_arms_the_composer_to_answer_the_command() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        transcript.contains("waiting for input"),
-        "the user needs to be told why the turn stalled: {transcript}"
+        transcript.contains("Continue? [y/N]"),
+        "the prompt must be surfaced: {transcript}"
     );
     assert!(
-        transcript.contains("Continue? [y/N]"),
-        "the command's own prompt must be surfaced: {transcript}"
+        transcript.contains("press Enter"),
+        "the user needs to be told how to answer: {transcript}"
+    );
+}
+
+/// A supplied prompt means the agent is asking something (`ask_user`); an empty
+/// one means a child process is reading stdin. Same wire message, so the
+/// wording has to be driven by the prompt or one of the two reads as nonsense.
+#[test]
+fn stdin_request_without_a_prompt_reads_as_a_command_not_a_question() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::StdinRequest {
+            request_id: "req-raw".to_string(),
+            prompt: String::new(),
+            is_password: false,
+            tool_call_id: "call-3".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert!(app.pending_stdin_request.is_some());
+    let transcript = app
+        .display_messages()
+        .iter()
+        .map(|msg| msg.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        transcript.contains("running command is waiting for input"),
+        "raw stdin must not be worded as a question: {transcript}"
     );
 }
 

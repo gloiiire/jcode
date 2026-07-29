@@ -878,15 +878,17 @@ async fn handle_remote_key_internal(
                 remote
                     .send_stdin_response(&pending.request_id, &format!("{answer}\n"))
                     .await?;
-                app.push_display_message(DisplayMessage::system(format!(
-                    "⌨ Sent to the running command: {}",
-                    if answer.trim().is_empty() {
-                        "(empty line)".to_string()
-                    } else {
-                        answer
-                    }
-                )));
-                app.set_status_notice("⌨ Input sent");
+                let shown = if answer.trim().is_empty() {
+                    "(empty line)".to_string()
+                } else {
+                    answer
+                };
+                app.push_display_message(DisplayMessage::system(if pending.prompt.is_empty() {
+                    format!("⌨ Sent to the running command: {shown}")
+                } else {
+                    format!("❯ {shown}")
+                }));
+                app.set_status_notice("⌨ Answer sent");
                 return Ok(());
             }
             if app.activate_picker_from_preview() {
